@@ -78,12 +78,17 @@ This function is called by `org-babel-execute-src-block'"
          (result ""))
     (with-current-buffer (process-buffer session)
       (erase-buffer))
-    (process-send-string session full-body)
-    (process-send-string session "\n")
-    (process-send-string session "'org-babel-finished-evaluating\n")
-    ;; wait for pie to finish evaluating
 
-    (message "hi")
+    (let ((tempfile (make-temp-file "ob-pie")))
+      (with-temp-buffer
+        (insert "#lang pie\n")
+        (insert full-body)
+        (insert "'org-babel-finished-evaluating\n")
+        (write-region (point-min) (point-max) tempfile))
+      (process-send-string session (format ",load %s\n" tempfile)))
+
+
+    ;; wait for pie to finish evaluating
     (with-current-buffer (process-buffer session)
       (let ((flag t))
         (while flag
@@ -92,7 +97,7 @@ This function is called by `org-babel-execute-src-block'"
           (setq flag (not (re-search-forward "(the Atom 'org-babel-finished-evaluating)" nil t)))))
       ;; delete the extra characters. (we know how many extra characters there are
       ;; because they end with 'org-babel-finished-evaluating)\n >)
-      (delete-region (- (point-max) 46) (point-max))
+      (delete-region (- (point-max) 42) (point-max))
       (buffer-substring-no-properties (point-min) (point-max)))))
 
 ;; ;; This function should be used to assign any variables in params in
@@ -120,7 +125,7 @@ Return the initialized session."
         s
       (let ((ret (make-process :name session
                                :buffer (get-buffer-create (concat "*" session "-pie-repl*"))
-                               :command '("racket" "-I" "pie")
+                               :command '("racket")
                                :noquery t))
             (flag t))
         ;; wait for the process to start
