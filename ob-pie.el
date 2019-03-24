@@ -37,6 +37,7 @@
 
 ;;; Code:
 (require 'subr-x)
+(require 'cl-lib)
 
 (require 'ob)
 (require 'ob-ref)
@@ -55,60 +56,44 @@
   ;; Doesnt really do anything yet
   body)
 
-;; This is the main function which is called to evaluate a code
-;; block.
-;;
-;; This function will evaluate the body of the source code and
-;; return the results as emacs-lisp depending on the value of the
-;; :results header argument
-;; - output means that the output to STDOUT will be captured and
-;;   returned
-;; - value means that the value of the last statement in the
-;;   source code block will be returned
-;;
-;; The most common first step in this function is the expansion of the
-;; PARAMS argument using `org-babel-process-params'.
-;;
-;; Please feel free to not implement options which aren't appropriate
-;; for your language (e.g. not all languages support interactive
-;; "session" evaluation).  Also you are free to define any new header
-;; arguments which you feel may be useful -- all header arguments
-;; specified by the user will be available in the PARAMS variable.
 (defun org-babel-execute:pie (body params)
   "Execute a block of pie code with org-babel.
 This function is called by `org-babel-execute-src-block'"
   (message "executing pie source code block")
   (let* ((processed-params (org-babel-process-params params))
-         ;; set the session if the session variable is non-nil
-         (session (org-babel-pie-initiate-session (first processed-params)))
+         ;; set the session name
+         ;; since we need a session, we either find one, or set it to "default" :P
+         (session-name (car (cl-remove-if-not (lambda (x) (eq (car x) :session)) processed-params)))
+         (session-name (or (and (not (string= (cdr session-name) "none")) (cdr session-name)) "default"))
+         (session (org-babel-pie-initiate-session session-name))
          ;; variables assigned for use in the block
-         (vars (second processed-params))
-         (result-params (third processed-params))
+         ;; (vars (second processed-params))
+         ;; (result-params (third processed-params))
          ;; either OUTPUT or VALUE which should behave as described above
          (result-type (fourth processed-params))
          ;; expand the body with `org-babel-expand-body:pie'
          (full-body (org-babel-expand-body:pie
-                     body params processed-params))
+                     body
+                     nil))
          (result ""))
-    ;; actually execute the source-code block either in a session or
-    ;; possibly by dropping it to a temporary file and evaluating the
-    ;; file.
-    ;; 
-    ;; for session based evaluation the functions defined in
-    ;; `org-babel-comint' will probably be helpful.
-    ;;
-    ;; for external evaluation the functions defined in
-    ;; `org-babel-eval' will probably be helpful.
-    ;;
-    ;; when forming a shell command, or a fragment of code in some
-    ;; other language, please preprocess any file names involved with
-    ;; the function `org-babel-process-file-name'. (See the way that
-    ;; function is used in the language files)
+    (with-current-buffer (process-buffer session)
+      (erase-buffer))
     (process-send-string session full-body)
     (process-send-string session "\n")
+    (process-send-string session "'org-babel-finished-evaluating\n")
+    ;; wait for pie to finish evaluating
+
+    (message "hi")
     (with-current-buffer (process-buffer session)
-      (prog1 (buffer-substring-no-properties (point) (point-max))
-        (goto-char (point-max))))))
+      (let ((flag t))
+        (while flag
+          (accept-process-output)
+          (goto-char (point-min))
+          (setq flag (not (re-search-forward "(the Atom 'org-babel-finished-evaluating)" nil t)))))
+      ;; delete the extra characters. (we know how many extra characters there are
+      ;; because they end with 'org-babel-finished-evaluating)\n >)
+      (delete-region (- (point-max) 46) (point-max))
+      (buffer-substring-no-properties (point-min) (point-max)))))
 
 ;; ;; This function should be used to assign any variables in params in
 ;; ;; the context of the session environment.
@@ -133,10 +118,19 @@ Return the initialized session."
   (unless (string= session "none")
     (if-let ((s (get-process session)))
         s
-      (make-process :name session
-                    :buffer (concat (get-buffer-create "*" session "-pie-repl*"))
-                    :command ("racket" "-I" "pie")
-                    :noquery t))))
+      (let ((ret (make-process :name session
+                               :buffer (get-buffer-create (concat "*" session "-pie-repl*"))
+                               :command '("racket" "-I" "pie")
+                               :noquery t))
+            (flag t))
+        ;; wait for the process to start
+        (with-current-buffer (process-buffer ret)
+          (while flag
+            (accept-process-output)
+            (if (and (char-after ) (= (char-after (point)) ?>))
+                (setq flag nil)
+              (forward-char))))
+        ret))))
 
 (provide 'ob-pie)
 ;;; ob-template.el ends here
